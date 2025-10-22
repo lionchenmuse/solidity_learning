@@ -3,7 +3,19 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
-contract Bank is ReentrancyGuard {
+interface IBank {
+    function deposit() external payable;
+    function getBalance(address _address) external view returns (uint256);
+    function withdraw(uint256 amount) external;    
+}
+
+interface IBankError {
+    error InsufficientBalance(address who, uint256 requireAmount, uint256 availableBalance);
+    error TransferFailed();
+}
+
+// Bank 实现了 IBank 接口
+contract Bank is ReentrancyGuard, IBank, IBankError {
     
 
     struct Account {
@@ -16,7 +28,7 @@ contract Bank is ReentrancyGuard {
     // mapping (address => bool) _members;
     Account[3] public top3;
 
-    address private admin;
+    address public admin;
 
     using EnumerableSet for EnumerableSet.AddressSet;
     EnumerableSet.AddressSet private _members;
@@ -29,8 +41,14 @@ contract Bank is ReentrancyGuard {
         }
     }
 
-    event ReceiveEvent(address indexed sender, uint256 amount, uint256 total);
-    receive() external payable {
+    modifier onlyAdmin() {
+        require(msg.sender == admin, "Only admin can call this function");
+        _;
+    }    
+
+    event Deposit(address indexed sender, uint256 amount, uint256 total);    
+
+    function deposit() public virtual payable nonReentrant {
         require(msg.sender != address(0), "Bank: zero address");
         require(msg.value != 0, "Bank: zero amount");
 
@@ -43,7 +61,11 @@ contract Bank is ReentrancyGuard {
             _members.add(msg.sender);
         }
         
-        emit ReceiveEvent(msg.sender, msg.value, total);
+        emit Deposit(msg.sender, msg.value, total);
+    }
+
+    receive() external virtual payable {
+        this.deposit();
     }
 
     function getBalance(address _address) external view returns (uint256) {
@@ -51,17 +73,16 @@ contract Bank is ReentrancyGuard {
         return balances[_address];
     }
 
-    function getAdmin() external view returns (address) {
-        return admin;
-    }
+    
 
-    function withdraw(uint256 amount) external nonReentrant {
+    event WithdrawSuccess(address indexed sender, uint256 amount);
+    event AdminWithdrawSuccess(uint256 amount);
+    event WhoWithdraw(address indexed who);
+    function withdraw(uint256 amount) public virtual nonReentrant {
+        emit WhoWithdraw(msg.sender);
         if (msg.sender != admin) {
-            require(amount <= balances[msg.sender], "Insufficient balance");
-            balances[msg.sender] -= amount;
-
-            // 重新计算排名
-            calcTop3WhenWithdrawing();
+            if (amount > balances[msg.sender]) revert InsufficientBalance(msg.sender, amount, balances[msg.sender]);
+            balances[msg.sender] -= amount;            
 
             // 当某人存款金额为0时，将他从地址数组中剔除，并剔除其成员资格
             if (balances[msg.sender] == 0) {
@@ -73,19 +94,32 @@ contract Bank is ReentrancyGuard {
                 }
             }
 
+            // 重新计算排名
+            calcTop3WhenWithdrawing();
+
             (bool success, ) = msg.sender.call{value: amount}("");
-            require(success, "Transfer failed");
+            require(success, TransferFailed());
+            emit WithdrawSuccess(msg.sender, amount);
         } else {
             uint256 total = 0;
             for (uint256 i = 0; i < _members.length(); i++) {
                 total += balances[_members.at(i)];    // 严重安全风险：管理员清空所有用户余额
                 balances[_members.at(i)] = 0;
             }
+            clearTop3();
             (bool success, ) = admin.call{value: total}("");
-            require(success, "Transfer to admin failed");
+            require(success, TransferFailed());
+            emit AdminWithdrawSuccess(total);
         }   
-        // 缺少事件记录，无法追踪资金流向    
-        // 链上分析工具（如 Etherscan）无法记录管理员操作
+    }
+
+    function clearTop3() private {
+        top3[0].user = address(0);
+        top3[0].amount = 0;
+        top3[1].user = address(0);
+        top3[1].amount = 0;
+        top3[2].user = address(0);
+        top3[2].amount = 0;
     }
 
     // 计算排名

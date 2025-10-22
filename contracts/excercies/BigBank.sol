@@ -4,9 +4,13 @@ pragma solidity ^0.8.20;
 import "./Bank.sol";
 
 contract BigBank is Bank {
+    // 0.001 ETH
     uint256 public limit = 1000000000000000;
 
+    constructor() Bank() {}
+
     modifier greaterThan() {
+        // 必须大于 0.001 ETH
         require(msg.value > limit, "Amount must be greater than 1000000000000000 wei");
         _;
     }
@@ -27,30 +31,34 @@ contract BigBank is Bank {
         emit withdrawFromBigBank(msg.sender, amount);
     }
 
+    event AdminChanged(address indexed oldAdmin, address indexed newAdmin);
+    /// @dev 可以重新设置管理员
+    function setAdmin(address _admin) external onlyAdmin {
+        address oldAdmin = admin;
+        admin = _admin;
+        emit AdminChanged(oldAdmin, admin);
+    }
+
 
 }
 
 contract Admin {
-    BigBank bigBank;
-    address private admin;
+    address public owner;
 
     constructor() {
-        bigBank = new BigBank();
-        admin = msg.sender;
+        owner = msg.sender;
     }
 
-    modifier onlyAdmin() {
-        require(msg.sender == admin, "Only admin can call this function");
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Only owner can call this function");
         _;
     }
 
-    function getAdmin() external view returns (address) {
-        return admin;
+    event WithdrawFromAdminSuccess();
+    function adminWithdraw(IBank bank) external onlyOwner {
+        bank.withdraw(123); // 随便填一个数，BigBank 会将全部资金转移给 Admin合约（因为重置了BigBank的管理员）
+        emit WithdrawFromAdminSuccess();
     }
 
-    event withdrawFromAdmin(address indexed who, uint256 amount);
-    function withdraw(uint256 amount) external onlyAdmin {
-        bigBank.withdraw(amount);
-        emit withdrawFromAdmin(msg.sender, amount);
-    }
+    receive() external payable { }
 }
